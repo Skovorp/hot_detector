@@ -42,7 +42,7 @@ class HotDetectorDataset(Dataset):
         self.transform = make_transform(resize_to)
         
 
-        csv_path = os.path.join(root_dir, f"{partition}.csv")
+        csv_path = os.path.join(root_dir, f"_{partition}.csv")
         if not os.path.exists(csv_path):
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
         
@@ -72,7 +72,7 @@ class HotDetectorDataset(Dataset):
             idx = idx.tolist()
         
         # Get image path and target
-        img_path = os.path.join(self.root_dir, self.data.iloc[idx]['photo_path'])
+        img_path = os.path.join(self.root_dir, self.data.iloc[idx]['photo_path'].split('/')[-1])
         target = self.data.iloc[idx]['part_likes']
         
         # Load image

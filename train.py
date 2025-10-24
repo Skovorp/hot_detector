@@ -29,8 +29,8 @@ wandb.init(
 
 device = torch.device(cfg['device'])
 
-train_dataset = HotDetectorDataset(partition='train', resize_to=cfg['data']['resize_to'])
-val_dataset = HotDetectorDataset(partition='test', resize_to=cfg['data']['resize_to'])
+train_dataset = HotDetectorDataset(partition='train', **cfg['data'])
+val_dataset = HotDetectorDataset(partition='test', **cfg['data'])
 print(val_dataset.get_stats())
 
 train_loader = DataLoader(train_dataset, batch_size=cfg['training']['train_bs'], shuffle=True, num_workers=cfg['training']['num_workers'])
