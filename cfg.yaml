@@ -1,0 +1,15 @@
+run_name: debug
+model:
+  backbone: "facebook/dinov3-convnext-tiny-pretrain-lvd1689m"
+  bb_dim: 768
+data:
+  resize_to: 512
+training:
+  epochs: 3
+  train_bs: 4
+  val_bs: 16
+  num_workers: 0
+  lr: 1.0e-4
+  weight_decay: 0.01
+seed: 42
+device: "mps"
