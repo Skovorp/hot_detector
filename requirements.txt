@@ -4,3 +4,4 @@ dotenv
 wandb
 hf_transfer
 scipy
+gdown
