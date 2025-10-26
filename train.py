@@ -48,6 +48,7 @@ lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=warmu
 
 for e in range(cfg['training']['epochs']):
     model.train()
+    correct_train_scores, predicted_train_scores = [], []
     pbar = tqdm(train_loader, desc=f'train {e+1}')
     for images, targets in pbar:
         optimizer.zero_grad()
@@ -63,20 +64,23 @@ for e in range(cfg['training']['epochs']):
             'loss': loss.item(),
             'lr': lr_scheduler.get_last_lr()[0]
         })
+        correct_train_scores.extend(targets.detach().cpu().numpy().tolist())
+        predicted_train_scores.extend(predictions.detach().cpu().numpy().tolist())
+    train_metrics = evaluate_ranking(correct_train_scores, predicted_train_scores, 'train')
+    print(train_metrics)
+    wandb.log(train_metrics)
     
     model.eval()
-    correct_scores = []
-    predicted_scores = []
-    
+    correct_val_scores, predicted_val_scores = [], []
     with torch.no_grad():
         pbar = tqdm(val_loader, desc=f'val {e+1}')
         for images, targets in pbar:
             images, targets = images.to(device), targets.to(device)
             predictions = model(images)
             
-            correct_scores.extend(targets.detach().cpu().numpy().tolist())
-            predicted_scores.extend(predictions.detach().cpu().numpy().tolist())
-    val_metrics = evaluate_ranking(correct_scores, predicted_scores, 'val')
+            correct_val_scores.extend(targets.detach().cpu().numpy().tolist())
+            predicted_val_scores.extend(predictions.detach().cpu().numpy().tolist())
+    val_metrics = evaluate_ranking(correct_val_scores, predicted_val_scores, 'val')
     print(val_metrics)
     wandb.log(val_metrics)
          
