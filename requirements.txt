@@ -1,0 +1,6 @@
+pandas
+transformers
+dotenv
+wandb
+hf_transfer
+scipy

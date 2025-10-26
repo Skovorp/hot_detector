@@ -1,16 +1,18 @@
-run_name: debug
+run_name: mse_800m
 model:
-  backbone: "facebook/dinov3-convnext-tiny-pretrain-lvd1689m"
-  bb_dim: 768
+  backbone: "facebook/dinov3-vith16plus-pretrain-lvd1689m"
+  bb_dim: 1280
 data:
   resize_to: 512
-  root_dir: "/Users/ksc/PycharmProjects/hot_detector/photos"
+  root_dir: "/root/exp_photos"
 training:
   epochs: 3
-  train_bs: 4
-  val_bs: 16
-  num_workers: 0
+  part_warmup: 0.2
+  train_bs: 2
+  val_bs: 2
+  num_workers: 4
   lr: 1.0e-4
   weight_decay: 0.01
+  grad_clip: 10.0
 seed: 42
-device: "mps"
+device: "cuda"

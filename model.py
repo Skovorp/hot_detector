@@ -1,4 +1,3 @@
-from turtle import forward
 from torch import nn
 from transformers import AutoModel
 
