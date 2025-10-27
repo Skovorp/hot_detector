@@ -53,19 +53,21 @@ for e in range(cfg['training']['epochs']):
     for images, targets in pbar:
         optimizer.zero_grad()
         images, targets = images.to(device), targets.to(device)
-        out = model(images)
-        loss = (out - targets).pow(2).mean()
+        with torch.autocast('cuda', dtype=torch.bfloat16):
+            out = model(images)
+            loss = torch.nn.functional.mse_loss(out, targets)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['grad_clip'])
         optimizer.step()
-        lr_scheduler.step()
+        if lr_scheduler:
+            lr_scheduler.step()
         pbar.set_postfix({"loss": loss.item()})
         wandb.log({
             'loss': loss.item(),
-            'lr': lr_scheduler.get_last_lr()[0]
+            'lr': cfg['training']['lr']
         })
-        correct_train_scores.extend(targets.detach().cpu().numpy().tolist())
-        predicted_train_scores.extend(predictions.detach().cpu().numpy().tolist())
+        correct_train_scores.extend(targets.float().detach().cpu().numpy().tolist())
+        predicted_train_scores.extend(out.float().detach().cpu().numpy().tolist())
     train_metrics = evaluate_ranking(correct_train_scores, predicted_train_scores, 'train')
     print(train_metrics)
     wandb.log(train_metrics)
