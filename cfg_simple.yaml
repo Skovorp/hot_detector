@@ -1,0 +1,16 @@
+run_name: frozen_listnet_with_2dp
+data:
+  train_path: /Users/ksc/PycharmProjects/hot_detector/precomputed_embeddings/train_embs_no_rs.pickle
+  val_path: /Users/ksc/PycharmProjects/hot_detector/precomputed_embeddings/val_embs_no_rs.pickle
+training:
+  epochs: 10
+  train_bs: 128
+  val_bs: 128
+  num_workers: 0
+  lr: 1.0e-4
+  weight_decay: 0.2
+  tau: 0.7
+  loss_use_logit: true
+  label_smooth: 0.0
+seed: 42
+device: "mps"

@@ -1,4 +1,5 @@
 import os
+import pickle
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
@@ -110,3 +111,24 @@ class HotDetectorDataset(Dataset):
             'target_max': self.data['part_likes'].max()
         }
         return stats
+
+
+class HotDetectorPrecomputedDataset(Dataset):
+    def __init__(self, path_pickle) -> None:
+        super().__init__()
+        
+        with open(path_pickle, 'rb') as f:
+            inp = pickle.load(f)
+        self.embs = inp['embeddings']
+        self.targets = inp['targets']
+        
+    def __len__(self) -> int:
+        return len(self.targets)
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.embs[idx], self.targets[idx]
+
+# if __name__ == "__main__":
+#     d = HotDetectorPrecomputedDataset('/Users/ksc/PycharmProjects/hot_detector/precomputed_embeddings/train_embs_512.pickle')
+#     print(d[500])
+    
