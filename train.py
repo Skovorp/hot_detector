@@ -56,7 +56,7 @@ for e in range(cfg['training']['epochs']):
         images, targets = images.to(device), targets.to(device)
         with torch.autocast('cuda', dtype=torch.bfloat16):
             out = model(images)
-            loss = listnet_loss(out, targets)
+            loss = listnet_loss(out, targets, tau=cfg['training']['tau'], use_logit=cfg['training']['loss_use_logit'])
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['grad_clip'])
         optimizer.step()

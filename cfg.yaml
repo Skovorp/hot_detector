@@ -1,4 +1,4 @@
-run_name: mse_7b_unfreeze_4e-5
+run_name: mse_7b_unfreeze_6ep
 model:
   backbone: "facebook/dinov3-vit7b16-pretrain-lvd1689m"
   bb_dim: 4096
@@ -7,13 +7,15 @@ data:
   resize_to: 512
   root_dir: "/root/exp_photos"
 training:
-  epochs: 3
+  epochs: 6
   part_warmup: 0.2
-  train_bs: 128
+  train_bs: 8
   val_bs: 128
   num_workers: 32
-  lr: 4.0e-5
+  lr: 1.2e-3
   weight_decay: 0.01
   grad_clip: 10.0
+  tau: 0.7
+  loss_use_logit: true
 seed: 42
 device: "cuda"
