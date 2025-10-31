@@ -12,6 +12,7 @@ import wandb
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 from metrics import evaluate_ranking
+from losses import listnet_loss
 
 load_dotenv()
 
@@ -55,16 +56,15 @@ for e in range(cfg['training']['epochs']):
         images, targets = images.to(device), targets.to(device)
         with torch.autocast('cuda', dtype=torch.bfloat16):
             out = model(images)
-            loss = torch.nn.functional.mse_loss(out, targets)
+            loss = listnet_loss(out, targets)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['grad_clip'])
         optimizer.step()
-        if lr_scheduler:
-            lr_scheduler.step()
+        lr_scheduler.step()
         pbar.set_postfix({"loss": loss.item()})
         wandb.log({
             'loss': loss.item(),
-            'lr': cfg['training']['lr']
+            'lr': lr_scheduler.get_last_lr()[0]
         })
         correct_train_scores.extend(targets.float().detach().cpu().numpy().tolist())
         predicted_train_scores.extend(out.float().detach().cpu().numpy().tolist())
@@ -78,11 +78,12 @@ for e in range(cfg['training']['epochs']):
         pbar = tqdm(val_loader, desc=f'val {e+1}')
         for images, targets in pbar:
             images, targets = images.to(device), targets.to(device)
-            predictions = model(images)
+            with torch.autocast('cuda', dtype=torch.bfloat16):
+                predictions = model(images)
             
-            correct_val_scores.extend(targets.detach().cpu().numpy().tolist())
-            predicted_val_scores.extend(predictions.detach().cpu().numpy().tolist())
+            correct_val_scores.extend(targets.float().detach().cpu().numpy().tolist())
+            predicted_val_scores.extend(predictions.float().detach().cpu().numpy().tolist())
     val_metrics = evaluate_ranking(correct_val_scores, predicted_val_scores, 'val')
     print(val_metrics)
     wandb.log(val_metrics)
-         
+model.save_finetune_weights()

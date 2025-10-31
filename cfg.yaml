@@ -1,18 +1,18 @@
-run_name: mse_7b_freeze_simple
+run_name: mse_7b_unfreeze_4e-5
 model:
   backbone: "facebook/dinov3-vit7b16-pretrain-lvd1689m"
   bb_dim: 4096
   freeze_bb: true
 data:
   resize_to: 512
-  root_dir: "/root/hot_detector/exp_photos"
+  root_dir: "/root/exp_photos"
 training:
   epochs: 3
   part_warmup: 0.2
   train_bs: 128
   val_bs: 128
   num_workers: 32
-  lr: 1.0e-4
+  lr: 4.0e-5
   weight_decay: 0.01
   grad_clip: 10.0
 seed: 42
