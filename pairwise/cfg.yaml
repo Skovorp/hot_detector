@@ -1,0 +1,23 @@
+run_name: pairwise_debug
+seed: 42
+device: "cuda"
+
+data:
+  root_dir: "/root"
+  cache_dir: "/root/hot_detector/pairwise/image_cache"
+  csv_pattern: "_{partition}_pairs.csv"
+
+model:
+  use_layers: 1
+
+training:
+  epochs: 3
+  part_warmup: 0.1
+  train_bs: 64
+  val_bs: 128
+  num_workers: 16
+  lr_embed: 1.0e-4
+  lr_combiner: 1.0e-3
+  weight_decay: 0.01
+  grad_clip: 1.0
+  output_dir: "/root/hot_detector/pairwise/checkpoints"

@@ -12,7 +12,7 @@ from dataset import make_transform
 from models import PreprocModel
 
 
-IMAGE_ROOT = Path("/root/exp_photos")
+IMAGE_ROOT = Path("/root/photos/photos")
 CACHE_ROOT = Path("/root/hot_detector/pairwise/image_cache")
 BATCH_SIZE = 128
 SKIP_LAYERS = 2
