@@ -53,7 +53,7 @@ class PairDatasetPreprocessed(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:        
-        from_img_path = os.path.join(self.root_dir, self.data.iloc[idx]['from_photo_path'].split('/')[-1])
+        from_img_path = self.data.iloc[idx]['from_photo_path'].split('/')[-1].split('')
         to_img_path = os.path.join(self.root_dir, self.data.iloc[idx]['to_photo_path'].split('/')[-1])
         target = self.data.iloc[idx]['is_like']
         

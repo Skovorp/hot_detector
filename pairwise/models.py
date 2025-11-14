@@ -1,22 +1,41 @@
 from torch import nn
 import torch
+from transformers import AutoModel
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class PreprocModel(nn.Module):
-    def __init__(self,):
+    def __init__(self, skip_layers):
         super().__init__()
-        self.transformer_layers = None # everything except for last 2 layers of AutoModel.from_pretrained("facebook/dinov3-vit7b16-pretrain-lvd1689m")
+        full_model = AutoModel.from_pretrained("facebook/dinov3-vit7b16-pretrain-lvd1689m")
+        self.embeddings = full_model.embeddings
+        self.rope_embeddings = full_model.rope_embeddings
+        self.encoder_layers = nn.ModuleList(full_model.layer[:-skip_layers]) 
+        del full_model
     
     def forward(self, x):
-        x = self.transformer_layers(x)
+        position_embeddings = self.rope_embeddings(x)
+        x = self.embeddings(x)
+        for layer in self.encoder_layers:
+            x = layer(x, position_embeddings=position_embeddings)
         return x
 
 class EmbedModel(nn.Module):
-    def __init__(self,):
+    def __init__(self, use_layers):
         super().__init__()
-        self.transformer_layers = None # last 2 layers of AutoModel.from_pretrained("facebook/dinov3-vit7b16-pretrain-lvd1689m") and pooler
+        full_model = AutoModel.from_pretrained("facebook/dinov3-vit7b16-pretrain-lvd1689m")
+        self.rope_embeddings = full_model.rope_embeddings
+        self.encoder_layers = nn.ModuleList(full_model.layer[-use_layers:]) 
+        self.norm = full_model.norm
+        del full_model
         
     def forward(self, x):
-        x = self.transformer_layers(x)
+        position_embeddings = self.rope_embeddings(torch.empty(1, 3, 512, 512, device=x.device, dtype=x.dtype))
+        for layer in self.encoder_layers:
+            x = layer(x, position_embeddings=position_embeddings)
+        x = self.norm(x)
+        x = x[:, 0, :]
         return x
     
 class Combine(nn.Module):
@@ -35,20 +54,17 @@ class Combine(nn.Module):
         x = self.stack(x)
         return x
     
-if __name__ == "__main__":
-    from random import random
-    from time import time
-    ina = [random() for _ in range(4096)]
-    inb = [random() for _ in range(4096)]
-
-    st = time()
-    with torch.no_grad():
-        m = Combine()
-        m.load_state_dict(torch.load("combine_weights.pth"))
-        a = torch.tensor(ina).unsqueeze(0)
-        b = torch.tensor(inb).unsqueeze(0)
-        
-        inp = torch.cat([a, b], 1)
-        print(torch.sigmoid(m(inp)).item())
-    print(time() - st)
+def test():
+    device = torch.device('cuda')
+    prep = PreprocModel(2).to(device)
+    embed = EmbedModel(2).to(device)
+    prep.eval()
+    embed.eval()
+    inp = torch.rand(1, 3, 512, 512).to(device)
+    out = embed(prep(inp))
+    
+    real_model = AutoModel.from_pretrained("facebook/dinov3-vit7b16-pretrain-lvd1689m").to(device)
+    real_model.eval()
+    res = real_model(pixel_values=inp).pooler_output
+    assert (res - out).abs().max().item() == 0.0
     
