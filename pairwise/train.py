@@ -5,6 +5,7 @@ from typing import Dict
 
 import numpy as np
 import torch
+import torch.multiprocessing as mp
 import yaml
 from dotenv import load_dotenv
 from sklearn.metrics import average_precision_score
@@ -17,6 +18,8 @@ import wandb
 
 from dataset import PairDatasetPreprocessed
 from models import Combine, EmbedModel
+
+# mp.set_sharing_strategy("file_system")
 
 
 def set_seed(seed: int) -> None:
@@ -56,12 +59,30 @@ def forward_pair(
     return logits
 
 
+def shutdown_loader(loader: DataLoader) -> None:
+    """
+    Forcefully tear down DataLoader worker pools so their shared-memory
+    allocations are released before spinning up the next set of workers.
+    This helps avoid hitting /dev/shm limits when alternating between large
+    train/val loaders in the same process.
+    """
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is None:
+        return
+
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if callable(shutdown):
+        shutdown()
+    loader._iterator = None  # type: ignore[attr-defined]
+
+
 def main() -> None:
     load_dotenv()
 
     cfg_path = Path(__file__).with_name("cfg.yaml")
     with cfg_path.open("r") as f:
         cfg = yaml.safe_load(f)
+    save_dir = Path(cfg["training"]["output_dir"]).expanduser().resolve() / cfg["run_name"]
         
     wandb.init(
         name=cfg['run_name'],
@@ -82,14 +103,16 @@ def main() -> None:
         batch_size=cfg["training"]["train_bs"],
         shuffle=True,
         num_workers=cfg["training"]["num_workers"],
-        # pin_memory=device.type == "cuda",
+        pin_memory=True,
+        prefetch_factor=cfg["training"]["prefetch_factor"]
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=cfg["training"]["val_bs"],
         shuffle=False,
         num_workers=cfg["training"]["num_workers"],
-        # pin_memory=device.type == "cuda",
+        pin_memory=True,
+        prefetch_factor=cfg["training"]["prefetch_factor"]
     )
 
     from_model = EmbedModel(cfg["model"]["use_layers"]).to(device)
@@ -183,6 +206,8 @@ def main() -> None:
         wandb.log({'train_loss': train_loss, 'train_ap': train_ap})
         print({'train_loss': train_loss, 'train_ap': train_ap})
 
+        shutdown_loader(train_loader)
+
         from_model.eval()
         to_model.eval()
         combiner.eval()
@@ -207,6 +232,8 @@ def main() -> None:
                 val_loss += loss.item()
                 pbar.set_postfix({"loss": loss.item()})
 
+        shutdown_loader(val_loader)
+
         val_loss /= max(1, len(val_loader))
         val_ap = average_precision_score(val_targets, val_scores)
         wandb.log({'val_loss': val_loss, 'val_ap': val_ap})
@@ -217,12 +244,9 @@ def main() -> None:
             f"train_loss: {train_loss:.4f} | train_AP: {train_ap:.4f} | "
             f"val_loss: {val_loss:.4f} | val_AP: {val_ap:.4f}"
         )
-
-    save_dir = (
-        Path(cfg["training"]["output_dir"]).expanduser().resolve() / cfg["run_name"]
-    )
-    save_weights(save_dir, cfg, from_model, to_model, combiner)
-    print(f"Saved weights to {save_dir}")
+        train_dataset.resample_data()
+        save_weights(save_dir, cfg, from_model, to_model, combiner)
+        print(f"Saved weights to {save_dir}")
 
 
 if __name__ == "__main__":
