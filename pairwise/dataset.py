@@ -42,7 +42,6 @@ class PairDatasetPreprocessed(Dataset):
         partition: str,
         cache_dir: str,
         num_items_epoch: int,
-        csv_pattern: str = "_{partition}_pairs.csv",
         max_retries: int = 5,
     ):
         if partition not in ("train", "test"):
@@ -55,11 +54,11 @@ class PairDatasetPreprocessed(Dataset):
         if not self.cache_dir.exists():
             raise FileNotFoundError(f"Cache directory not found: {self.cache_dir}")
 
-        csv_path = self.cache_dir / f"_{partition}_pairs.csv"
+        csv_path = self.cache_dir / f"_{partition}_swipes.parquet"
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
-        self.data = pd.read_csv(csv_path)
+        self.data = pd.read_parquet(csv_path)
         self.mapping = json.load(open(self.cache_dir / 'partition_mapping.json'))
 
         self.open_partitions = {x: safe_open(x, framework="pt", device="cpu") for x in set(self.mapping.values())}
@@ -82,16 +81,16 @@ class PairDatasetPreprocessed(Dataset):
 
         print("before length", len(self.data))
         self.data = self.data[(self.data["from_stem"].isin(available_stems)) & (self.data["to_stem"].isin(available_stems))]
-        print("after  length", len(self.data))
         
         self.max_retries = max(1, int(max_retries))
-
-        print(f"Loaded {len(self.data)} samples from {partition} partition")
         
-        assert self.num_items_epoch > 0 and self.num_items_epoch <= len(self.data), (self.num_items_epoch, len(self.data))
+        # assert self.num_items_epoch > 0 and self.num_items_epoch <= len(self.data), (self.num_items_epoch, len(self.data))
         self.sampled_data = self.data
         if self.partition == 'train':
             self.resample_data()
+        
+        print("after  length", len(self.sampled_data))
+        print(f"Loaded {len(self.sampled_data)} samples from {partition} partition")
 
     def __len__(self) -> int:
         return len(self.sampled_data)

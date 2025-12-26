@@ -1,14 +1,13 @@
-run_name: 50k_train
+run_name: 50k_1layer_high_wd_05
 seed: 42
 device: "cuda"
 
 data:
   cache_dir: "/root/hot_detector/pairwise/image_cache"
-  csv_pattern: "_{partition}_pairs.csv"
   num_items_epoch: 50000
 
 model:
-  use_layers: 2
+  use_layers: 1
 
 training:
   epochs: 3
@@ -16,9 +15,9 @@ training:
   train_bs: 64
   val_bs: 64
   num_workers: 20
-  lr_embed: 1.0e-4
+  lr_embed: 1.0e-3
   lr_combiner: 1.0e-3
-  weight_decay: 0.01
+  weight_decay: 0.5
   grad_clip: 1.0
   output_dir: "/root/hot_detector/pairwise/checkpoints"
   prefetch_factor: 1

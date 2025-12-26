@@ -15,12 +15,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-IMAGE_ROOT = Path("/root/photos")
+IMAGE_ROOT = Path("/root/used_images")
 CACHE_ROOT = Path("/root/hot_detector/pairwise/image_cache")
 BATCH_SIZE = 256
-SKIP_LAYERS = 2 
+SKIP_LAYERS = 1
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-NUM_WORKERS = max(1, min(8, (os.cpu_count() or 1) // 2))
+NUM_WORKERS = 20 # max(1, min(8, (os.cpu_count() or 1) // 2))
 MAPPING_FILENAME = "partition_mapping.json"
 
 
@@ -33,7 +33,11 @@ class ImageFolderDataset(Dataset):
         self.images: List[str] = sorted(
             str(path)
             for path in self.root_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS
+            if (
+                path.is_file()
+                and not path.name.startswith(".")
+                and path.suffix.lower() in ALLOWED_EXTENSIONS
+            )
         )
         if not self.images:
             raise RuntimeError(f"No images found under {self.root_dir}")
