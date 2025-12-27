@@ -20,7 +20,7 @@ CACHE_ROOT = Path("/root/hot_detector/pairwise/image_cache")
 BATCH_SIZE = 256
 SKIP_LAYERS = 1
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-NUM_WORKERS = 20 # max(1, min(8, (os.cpu_count() or 1) // 2))
+NUM_WORKERS = 8 # max(1, min(8, (os.cpu_count() or 1) // 2))
 MAPPING_FILENAME = "partition_mapping.json"
 
 

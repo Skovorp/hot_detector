@@ -1,13 +1,17 @@
 import itertools
+import json
 import random
+import sys
 from pathlib import Path
 from typing import Dict
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.multiprocessing as mp
 import yaml
 from dotenv import load_dotenv
+from safetensors.torch import safe_open
 from sklearn.metrics import average_precision_score
 from torch import nn
 from torch.cuda import amp
@@ -16,6 +20,8 @@ from tqdm.auto import tqdm
 from transformers import get_cosine_schedule_with_warmup
 import wandb
 
+sys.path.append(str(Path(__file__).parent.parent))
+from metrics import evaluate_ranking
 from dataset import PairDatasetPreprocessed
 from models import Combine, EmbedModel
 
@@ -57,6 +63,68 @@ def forward_pair(
     concat = torch.cat((from_embed, to_embed), dim=1)
     logits = combiner(concat).squeeze(-1)
     return logits
+
+
+def preload_absolute_eval_data(cache_dir: Path, profiles_path: Path, device: torch.device):
+    """Preload all data needed for absolute evaluation."""
+    df = pd.read_parquet(profiles_path)[["photo_path", "sex", "part_likes"]]
+    df["stem"] = df["photo_path"].apply(lambda x: Path(x).stem)
+    
+    mapping = json.load(open(cache_dir / "partition_mapping.json"))
+    partitions = {p: safe_open(p, framework="pt", device="cpu") for p in set(mapping.values())}
+    
+    males = df[df["sex"] == "male"].reset_index(drop=True)
+    females = df[df["sex"] == "female"].reset_index(drop=True)
+    
+    def load_enc(stem):
+        return partitions[mapping[stem]].get_tensor(stem)
+    
+    male_enc = torch.stack([load_enc(s) for s in males["stem"]]).to(device)
+    female_enc = torch.stack([load_enc(s) for s in females["stem"]]).to(device)
+    
+    return males, females, male_enc, female_enc
+
+
+def evaluate_absolute(
+    from_model: EmbedModel,
+    to_model: EmbedModel,
+    combiner: Combine,
+    males: pd.DataFrame,
+    females: pd.DataFrame,
+    male_enc: torch.Tensor,
+    female_enc: torch.Tensor,
+) -> Dict:
+    """Evaluate absolute popularity prediction."""
+    from_model.eval()
+    to_model.eval()
+    combiner.eval()
+    
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        male_from = from_model(male_enc)
+        male_to = to_model(male_enc)
+        female_from = from_model(female_enc)
+        female_to = to_model(female_enc)
+    
+    # score males: each male as "to", all females as "from"
+    male_scores = []
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        for i in range(len(males)):
+            concat = torch.cat([female_from, male_to[i:i+1].expand(len(females), -1)], dim=1)
+            logits = combiner(concat).squeeze(-1)
+            male_scores.append(torch.sigmoid(logits).mean().item())
+    
+    # score females: each female as "to", all males as "from"
+    female_scores = []
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        for i in range(len(females)):
+            concat = torch.cat([male_from, female_to[i:i+1].expand(len(males), -1)], dim=1)
+            logits = combiner(concat).squeeze(-1)
+            female_scores.append(torch.sigmoid(logits).mean().item())
+    
+    male_metrics = evaluate_ranking(males["part_likes"].tolist(), male_scores, "male")
+    female_metrics = evaluate_ranking(females["part_likes"].tolist(), female_scores, "female")
+    
+    return {'avg_tau': (male_metrics['male_kendall_tau'] + female_metrics['female_kendall_tau']) / 2, **male_metrics, **female_metrics}
 
 
 def shutdown_loader(loader: DataLoader) -> None:
@@ -119,32 +187,25 @@ def main() -> None:
     to_model = EmbedModel(cfg["model"]["use_layers"]).to(device)
     combiner = Combine().to(device)
 
+    # Preload absolute eval data
+    cache_dir = Path(cfg["data"]["cache_dir"])
+    profiles_path = cache_dir / "_test_profiles.parquet"
+    males, females, male_enc, female_enc = preload_absolute_eval_data(cache_dir, profiles_path, device)
+    print(f"Singleplayer ranking eval: {len(males)} males, {len(females)} females")
+
     criterion = nn.BCEWithLogitsLoss()
 
-    optimizer_from = torch.optim.AdamW(
-        from_model.parameters(),
-        lr=cfg["training"]["lr_embed"],
-        weight_decay=cfg["training"]["weight_decay"],
-    )
-    optimizer_to = torch.optim.AdamW(
-        to_model.parameters(),
-        lr=cfg["training"]["lr_embed"],
-        weight_decay=cfg["training"]["weight_decay"],
-    )
-    optimizer_comb = torch.optim.AdamW(
-        combiner.parameters(),
-        lr=cfg["training"]["lr_combiner"],
+    optimizer = torch.optim.AdamW(
+        itertools.chain(from_model.parameters(), to_model.parameters(), combiner.parameters()),
+        lr=cfg["training"]["lr"],
         weight_decay=cfg["training"]["weight_decay"],
     )
 
     total_steps = max(1, len(train_loader) * cfg["training"]["epochs"])
     warmup_steps = max(1, int(total_steps * cfg["training"]["part_warmup"]))
 
-    scheduler_from = get_cosine_schedule_with_warmup(
-        optimizer_from, num_warmup_steps=warmup_steps, num_training_steps=total_steps
-    )
-    scheduler_to = get_cosine_schedule_with_warmup(
-        optimizer_to, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
 
     for epoch in range(cfg["training"]["epochs"]):
@@ -162,9 +223,7 @@ def main() -> None:
             to_batch = to_batch.to(device, non_blocking=True)
             targets = targets.to(device=device, dtype=torch.float32)
 
-            optimizer_from.zero_grad(set_to_none=True)
-            optimizer_to.zero_grad(set_to_none=True)
-            optimizer_comb.zero_grad(set_to_none=True)
+            optimizer.zero_grad(set_to_none=True)
 
             with torch.autocast('cuda', dtype=torch.bfloat16):
                 logits = forward_pair(from_model, to_model, combiner, from_batch, to_batch)
@@ -183,12 +242,8 @@ def main() -> None:
                     cfg["training"]["grad_clip"],
                 )
 
-            optimizer_from.step()
-            optimizer_to.step()
-            optimizer_comb.step()
-
-            scheduler_from.step()
-            scheduler_to.step()
+            optimizer.step()
+            scheduler.step()
 
             probs = torch.sigmoid(logits).detach().cpu().tolist()
             train_scores.extend(probs)
@@ -197,8 +252,7 @@ def main() -> None:
             pbar.set_postfix({"loss": loss.item()})
             wandb.log({
                 'loss': loss.item(),
-                'lr_from': scheduler_from.get_last_lr()[0],
-                'lr_to': scheduler_to.get_last_lr()[0],
+                'lr': scheduler.get_last_lr()[0],
             })
 
         train_loss /= max(1, len(train_loader))
@@ -238,6 +292,13 @@ def main() -> None:
         val_ap = average_precision_score(val_targets, val_scores)
         wandb.log({'val_loss': val_loss, 'val_ap': val_ap})
         print({'val_loss': val_loss, 'val_ap': val_ap})
+
+        # Absolute evaluation
+        abs_metrics = evaluate_absolute(
+            from_model, to_model, combiner, males, females, male_enc, female_enc
+        )
+        wandb.log(abs_metrics)
+        print(abs_metrics)
 
         print(
             f"Epoch {epoch + 1}/{cfg['training']['epochs']} | "

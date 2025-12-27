@@ -5,3 +5,5 @@ wandb
 hf_transfer
 scipy
 gdown
+scikit-learn
+fastparquet
