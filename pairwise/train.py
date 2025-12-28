@@ -1,17 +1,13 @@
 import itertools
-import json
 import random
-import sys
 from pathlib import Path
 from typing import Dict
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.multiprocessing as mp
 import yaml
 from dotenv import load_dotenv
-from safetensors.torch import safe_open
 from sklearn.metrics import average_precision_score
 from torch import nn
 from torch.cuda import amp
@@ -19,9 +15,13 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_cosine_schedule_with_warmup
 import wandb
-
+import pandas as pd
+from safetensors.torch import safe_open
+import json
+import sys
 sys.path.append(str(Path(__file__).parent.parent))
 from metrics import evaluate_ranking
+
 from dataset import PairDatasetPreprocessed
 from models import Combine, EmbedModel
 
@@ -65,6 +65,22 @@ def forward_pair(
     return logits
 
 
+def shutdown_loader(loader: DataLoader) -> None:
+    """
+    Forcefully tear down DataLoader worker pools so their shared-memory
+    allocations are released before spinning up the next set of workers.
+    This helps avoid hitting /dev/shm limits when alternating between large
+    train/val loaders in the same process.
+    """
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is None:
+        return
+
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if callable(shutdown):
+        shutdown()
+    loader._iterator = None  # type: ignore[attr-defined]
+    
 def preload_absolute_eval_data(cache_dir: Path, profiles_path: Path, device: torch.device):
     """Preload all data needed for absolute evaluation."""
     df = pd.read_parquet(profiles_path)[["photo_path", "sex", "part_likes"]]
@@ -127,23 +143,6 @@ def evaluate_absolute(
     return {'avg_tau': (male_metrics['male_kendall_tau'] + female_metrics['female_kendall_tau']) / 2, **male_metrics, **female_metrics}
 
 
-def shutdown_loader(loader: DataLoader) -> None:
-    """
-    Forcefully tear down DataLoader worker pools so their shared-memory
-    allocations are released before spinning up the next set of workers.
-    This helps avoid hitting /dev/shm limits when alternating between large
-    train/val loaders in the same process.
-    """
-    iterator = getattr(loader, "_iterator", None)
-    if iterator is None:
-        return
-
-    shutdown = getattr(iterator, "_shutdown_workers", None)
-    if callable(shutdown):
-        shutdown()
-    loader._iterator = None  # type: ignore[attr-defined]
-
-
 def main() -> None:
     load_dotenv()
 
@@ -187,26 +186,39 @@ def main() -> None:
     to_model = EmbedModel(cfg["model"]["use_layers"]).to(device)
     combiner = Combine().to(device)
 
-    # Preload absolute eval data
-    cache_dir = Path(cfg["data"]["cache_dir"])
-    profiles_path = cache_dir / "_test_profiles.parquet"
-    males, females, male_enc, female_enc = preload_absolute_eval_data(cache_dir, profiles_path, device)
-    print(f"Singleplayer ranking eval: {len(males)} males, {len(females)} females")
-
     criterion = nn.BCEWithLogitsLoss()
 
-    optimizer = torch.optim.AdamW(
-        itertools.chain(from_model.parameters(), to_model.parameters(), combiner.parameters()),
-        lr=cfg["training"]["lr"],
+    optimizer_from = torch.optim.AdamW(
+        from_model.parameters(),
+        lr=cfg["training"]["lr_embed"],
+        weight_decay=cfg["training"]["weight_decay"],
+    )
+    optimizer_to = torch.optim.AdamW(
+        to_model.parameters(),
+        lr=cfg["training"]["lr_embed"],
+        weight_decay=cfg["training"]["weight_decay"],
+    )
+    optimizer_comb = torch.optim.AdamW(
+        combiner.parameters(),
+        lr=cfg["training"]["lr_combiner"],
         weight_decay=cfg["training"]["weight_decay"],
     )
 
     total_steps = max(1, len(train_loader) * cfg["training"]["epochs"])
     warmup_steps = max(1, int(total_steps * cfg["training"]["part_warmup"]))
 
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    scheduler_from = get_cosine_schedule_with_warmup(
+        optimizer_from, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
+    scheduler_to = get_cosine_schedule_with_warmup(
+        optimizer_to, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    )
+    
+     # Preload absolute eval data
+    cache_dir = Path(cfg["data"]["cache_dir"])
+    profiles_path = cache_dir / "_test_profiles.parquet"
+    males, females, male_enc, female_enc = preload_absolute_eval_data(cache_dir, profiles_path, device)
+    print(f"Singleplayer ranking eval: {len(males)} males, {len(females)} females")
 
     for epoch in range(cfg["training"]["epochs"]):
         from_model.train()
@@ -223,7 +235,9 @@ def main() -> None:
             to_batch = to_batch.to(device, non_blocking=True)
             targets = targets.to(device=device, dtype=torch.float32)
 
-            optimizer.zero_grad(set_to_none=True)
+            optimizer_from.zero_grad(set_to_none=True)
+            optimizer_to.zero_grad(set_to_none=True)
+            optimizer_comb.zero_grad(set_to_none=True)
 
             with torch.autocast('cuda', dtype=torch.bfloat16):
                 logits = forward_pair(from_model, to_model, combiner, from_batch, to_batch)
@@ -242,8 +256,12 @@ def main() -> None:
                     cfg["training"]["grad_clip"],
                 )
 
-            optimizer.step()
-            scheduler.step()
+            optimizer_from.step()
+            optimizer_to.step()
+            optimizer_comb.step()
+
+            scheduler_from.step()
+            scheduler_to.step()
 
             probs = torch.sigmoid(logits).detach().cpu().tolist()
             train_scores.extend(probs)
@@ -252,7 +270,8 @@ def main() -> None:
             pbar.set_postfix({"loss": loss.item()})
             wandb.log({
                 'loss': loss.item(),
-                'lr': scheduler.get_last_lr()[0],
+                'lr_from': scheduler_from.get_last_lr()[0],
+                'lr_to': scheduler_to.get_last_lr()[0],
             })
 
         train_loss /= max(1, len(train_loader))
@@ -292,7 +311,7 @@ def main() -> None:
         val_ap = average_precision_score(val_targets, val_scores)
         wandb.log({'val_loss': val_loss, 'val_ap': val_ap})
         print({'val_loss': val_loss, 'val_ap': val_ap})
-
+        
         # Absolute evaluation
         abs_metrics = evaluate_absolute(
             from_model, to_model, combiner, males, females, male_enc, female_enc

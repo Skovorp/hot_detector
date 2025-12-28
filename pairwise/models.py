@@ -22,21 +22,15 @@ class PreprocModel(nn.Module):
         return x
 
 class EmbedModel(nn.Module):
-    def __init__(self, use_layers, part_mask=None):
+    def __init__(self, use_layers):
         super().__init__()
         full_model = AutoModel.from_pretrained("facebook/dinov3-vit7b16-pretrain-lvd1689m")
         self.rope_embeddings = full_model.rope_embeddings
         self.encoder_layers = nn.ModuleList(full_model.layer[-use_layers:]) 
         self.norm = full_model.norm
-        self.part_mask = part_mask
-        self.mask_token = nn.Parameter(torch.randn(1, 1, 4096))
         del full_model
         
     def forward(self, x):
-        if self.part_mask and self.training:
-            mask = torch.rand(x.shape[0], x.shape[1], 1, device=x.device) < self.part_mask
-            mask[:, :5, :] = False  # don't mask CLS + 4 register tokens
-            x = torch.where(mask, self.mask_token, x)
         position_embeddings = self.rope_embeddings(torch.empty(1, 3, 512, 512, device=x.device, dtype=x.dtype))
         for layer in self.encoder_layers:
             x = layer(x, position_embeddings=position_embeddings)
@@ -50,10 +44,10 @@ class Combine(nn.Module):
         
         self.stack = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(4096 * 2, 4096),
+            nn.Linear(4096 * 2, 256),
             nn.Dropout(0.5),
             nn.GELU(),
-            nn.Linear(4096, 1)
+            nn.Linear(256, 1)
         )
     
     def forward(self, x):
