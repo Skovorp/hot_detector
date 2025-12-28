@@ -213,6 +213,9 @@ def main() -> None:
     scheduler_to = get_cosine_schedule_with_warmup(
         optimizer_to, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
+    # scheduler_comb = get_cosine_schedule_with_warmup(
+    #     optimizer_comb, num_warmup_steps=warmup_steps, num_training_steps=total_steps
+    # )
     
      # Preload absolute eval data
     cache_dir = Path(cfg["data"]["cache_dir"])
@@ -262,6 +265,7 @@ def main() -> None:
 
             scheduler_from.step()
             scheduler_to.step()
+            # scheduler_comb.step()
 
             probs = torch.sigmoid(logits).detach().cpu().tolist()
             train_scores.extend(probs)
@@ -272,6 +276,7 @@ def main() -> None:
                 'loss': loss.item(),
                 'lr_from': scheduler_from.get_last_lr()[0],
                 'lr_to': scheduler_to.get_last_lr()[0],
+                # 'lr_comb': scheduler_comb.get_last_lr()[0],
             })
 
         train_loss /= max(1, len(train_loader))
