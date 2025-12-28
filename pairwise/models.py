@@ -44,10 +44,10 @@ class Combine(nn.Module):
         
         self.stack = nn.Sequential(
             nn.Dropout(0.5),
-            nn.Linear(4096 * 2, 4096),
+            nn.Linear(4096 * 2, 256),
             nn.Dropout(0.5),
             nn.GELU(),
-            nn.Linear(4096, 1)
+            nn.Linear(256, 1)
         )
     
     def forward(self, x):

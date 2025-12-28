@@ -1,23 +1,23 @@
-run_name: 50k_1layer_high_wd_05
+run_name: 10k_6ep_new_branch_256
 seed: 42
 device: "cuda"
 
 data:
   cache_dir: "/root/hot_detector/pairwise/image_cache"
-  num_items_epoch: 50000
+  num_items_epoch: 10000
 
 model:
   use_layers: 1
 
 training:
-  epochs: 3
+  epochs: 6
   part_warmup: 0.1
   train_bs: 64
   val_bs: 64
   num_workers: 20
   lr_embed: 1.0e-3
   lr_combiner: 1.0e-3
-  weight_decay: 0.5
+  weight_decay: 0.1
   grad_clip: 1.0
   output_dir: "/root/hot_detector/pairwise/checkpoints"
   prefetch_factor: 1

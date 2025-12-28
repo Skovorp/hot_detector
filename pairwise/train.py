@@ -15,6 +15,12 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import get_cosine_schedule_with_warmup
 import wandb
+import pandas as pd
+from safetensors.torch import safe_open
+import json
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+from metrics import evaluate_ranking
 
 from dataset import PairDatasetPreprocessed
 from models import Combine, EmbedModel
@@ -74,6 +80,67 @@ def shutdown_loader(loader: DataLoader) -> None:
     if callable(shutdown):
         shutdown()
     loader._iterator = None  # type: ignore[attr-defined]
+    
+def preload_absolute_eval_data(cache_dir: Path, profiles_path: Path, device: torch.device):
+    """Preload all data needed for absolute evaluation."""
+    df = pd.read_parquet(profiles_path)[["photo_path", "sex", "part_likes"]]
+    df["stem"] = df["photo_path"].apply(lambda x: Path(x).stem)
+    
+    mapping = json.load(open(cache_dir / "partition_mapping.json"))
+    partitions = {p: safe_open(p, framework="pt", device="cpu") for p in set(mapping.values())}
+    
+    males = df[df["sex"] == "male"].reset_index(drop=True)
+    females = df[df["sex"] == "female"].reset_index(drop=True)
+    
+    def load_enc(stem):
+        return partitions[mapping[stem]].get_tensor(stem)
+    
+    male_enc = torch.stack([load_enc(s) for s in males["stem"]]).to(device)
+    female_enc = torch.stack([load_enc(s) for s in females["stem"]]).to(device)
+    
+    return males, females, male_enc, female_enc
+
+
+def evaluate_absolute(
+    from_model: EmbedModel,
+    to_model: EmbedModel,
+    combiner: Combine,
+    males: pd.DataFrame,
+    females: pd.DataFrame,
+    male_enc: torch.Tensor,
+    female_enc: torch.Tensor,
+) -> Dict:
+    """Evaluate absolute popularity prediction."""
+    from_model.eval()
+    to_model.eval()
+    combiner.eval()
+    
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        male_from = from_model(male_enc)
+        male_to = to_model(male_enc)
+        female_from = from_model(female_enc)
+        female_to = to_model(female_enc)
+    
+    # score males: each male as "to", all females as "from"
+    male_scores = []
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        for i in range(len(males)):
+            concat = torch.cat([female_from, male_to[i:i+1].expand(len(females), -1)], dim=1)
+            logits = combiner(concat).squeeze(-1)
+            male_scores.append(torch.sigmoid(logits).mean().item())
+    
+    # score females: each female as "to", all males as "from"
+    female_scores = []
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        for i in range(len(females)):
+            concat = torch.cat([male_from, female_to[i:i+1].expand(len(males), -1)], dim=1)
+            logits = combiner(concat).squeeze(-1)
+            female_scores.append(torch.sigmoid(logits).mean().item())
+    
+    male_metrics = evaluate_ranking(males["part_likes"].tolist(), male_scores, "male")
+    female_metrics = evaluate_ranking(females["part_likes"].tolist(), female_scores, "female")
+    
+    return {'avg_tau': (male_metrics['male_kendall_tau'] + female_metrics['female_kendall_tau']) / 2, **male_metrics, **female_metrics}
 
 
 def main() -> None:
@@ -146,6 +213,12 @@ def main() -> None:
     scheduler_to = get_cosine_schedule_with_warmup(
         optimizer_to, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
+    
+     # Preload absolute eval data
+    cache_dir = Path(cfg["data"]["cache_dir"])
+    profiles_path = cache_dir / "_test_profiles.parquet"
+    males, females, male_enc, female_enc = preload_absolute_eval_data(cache_dir, profiles_path, device)
+    print(f"Singleplayer ranking eval: {len(males)} males, {len(females)} females")
 
     for epoch in range(cfg["training"]["epochs"]):
         from_model.train()
@@ -238,6 +311,13 @@ def main() -> None:
         val_ap = average_precision_score(val_targets, val_scores)
         wandb.log({'val_loss': val_loss, 'val_ap': val_ap})
         print({'val_loss': val_loss, 'val_ap': val_ap})
+        
+        # Absolute evaluation
+        abs_metrics = evaluate_absolute(
+            from_model, to_model, combiner, males, females, male_enc, female_enc
+        )
+        wandb.log(abs_metrics)
+        print(abs_metrics)
 
         print(
             f"Epoch {epoch + 1}/{cfg['training']['epochs']} | "
