@@ -1,4 +1,4 @@
-run_name: 10k_6ep_neftune_1
+run_name: 30k_6ep_new_branch_256_new_split_smaller_batch
 seed: 42
 device: "cuda"
 
@@ -8,16 +8,15 @@ data:
 
 model:
   use_layers: 1
-  neftune_alpha: 1
 
 training:
-  epochs: 6
+  epochs: 30
   part_warmup: 0.1
-  train_bs: 64
+  train_bs: 8
   val_bs: 64
   num_workers: 20
-  lr_embed: 1.0e-3
-  lr_combiner: 1.0e-3
+  lr_embed: 8.0e-3
+  lr_combiner: 8.0e-3
   weight_decay: 0.1
   grad_clip: 1.0
   output_dir: "/root/hot_detector/pairwise/checkpoints"

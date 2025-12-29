@@ -143,11 +143,10 @@ def evaluate_absolute(
     return {'avg_tau': (male_metrics['male_kendall_tau'] + female_metrics['female_kendall_tau']) / 2, **male_metrics, **female_metrics}
 
 
-def main() -> None:
+def main(cfg_path) -> None:
     load_dotenv()
 
-    cfg_path = Path(__file__).with_name("cfg.yaml")
-    with cfg_path.open("r") as f:
+    with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
     save_dir = Path(cfg["training"]["output_dir"]).expanduser().resolve() / cfg["run_name"]
         
@@ -182,8 +181,8 @@ def main() -> None:
         prefetch_factor=cfg["training"]["prefetch_factor"]
     )
 
-    from_model = EmbedModel(cfg["model"]["use_layers"]).to(device)
-    to_model = EmbedModel(cfg["model"]["use_layers"]).to(device)
+    from_model = EmbedModel(cfg["model"]["use_layers"], cfg["model"]["neftune_alpha"]).to(device)
+    to_model = EmbedModel(cfg["model"]["use_layers"], cfg["model"]["neftune_alpha"]).to(device)
     combiner = Combine().to(device)
 
     criterion = nn.BCEWithLogitsLoss()
@@ -335,4 +334,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cfg_path = sys.argv[1] if len(sys.argv) > 1 else "cfg.yaml"
+    main(cfg_path)
